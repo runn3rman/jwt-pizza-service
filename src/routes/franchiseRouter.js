@@ -4,6 +4,7 @@ const { authRouter } = require('./authRouter.js');
 const { StatusCodeError, asyncHandler } = require('../endpointHelper.js');
 
 const franchiseRouter = express.Router();
+const unused = 1;
 
 franchiseRouter.docs = [
   {
