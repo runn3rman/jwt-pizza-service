@@ -2,5 +2,6 @@
 **/.DS_Store
 .vscode
 config.js
+src/config.js
 coverage
 dist
