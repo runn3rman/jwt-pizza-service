@@ -1,3 +1,4 @@
+const os = require('os');
 const config = require('./config.js');
 
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
@@ -159,6 +160,25 @@ function createMetricsClient() {
       memoryPercent: Number(sample?.memoryPercent ?? 0),
       timestamp: Date.now(),
     };
+  }
+
+  function getCpuUsagePercentage() {
+    const cpuUsage = os.loadavg()[0] / os.cpus().length;
+    return Number((cpuUsage * 100).toFixed(2));
+  }
+
+  function getMemoryUsagePercentage() {
+    const totalMemory = os.totalmem();
+    const freeMemory = os.freemem();
+    const usedMemory = totalMemory - freeMemory;
+    return Number(((usedMemory / totalMemory) * 100).toFixed(2));
+  }
+
+  function collectSystemMetricsSnapshot() {
+    collectSystemMetrics({
+      cpuPercent: getCpuUsagePercentage(),
+      memoryPercent: getMemoryUsagePercentage(),
+    });
   }
 
   function recordIngestionTestMetrics() {
@@ -458,12 +478,14 @@ function createMetricsClient() {
     }
 
     state.flushIntervalMs = intervalMs;
+    collectSystemMetricsSnapshot();
 
     if (state.flushTimer) {
       clearInterval(state.flushTimer);
     }
 
     state.flushTimer = setInterval(() => {
+      collectSystemMetricsSnapshot();
       flush();
     }, state.flushIntervalMs);
 
@@ -478,6 +500,7 @@ function createMetricsClient() {
     trackActiveUser,
     trackPizzaPurchase,
     collectSystemMetrics,
+    collectSystemMetricsSnapshot,
     startReporter,
     flush,
     recordIngestionTestMetrics,
