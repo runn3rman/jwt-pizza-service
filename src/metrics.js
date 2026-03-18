@@ -22,6 +22,23 @@ function createMetricsClient() {
   }
 
   function requestTracker(req, res, next) {
+    if (!isEnabled()) {
+      next();
+      return;
+    }
+
+    const startedAt = Date.now();
+
+    res.on('finish', () => {
+      state.requestEvents.push({
+        method: req.method,
+        path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
+        statusCode: res.statusCode,
+        latencyMs: Date.now() - startedAt,
+        timestamp: Date.now(),
+      });
+    });
+
     next();
   }
 
