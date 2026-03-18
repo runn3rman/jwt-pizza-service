@@ -76,6 +76,10 @@ function createMetricsClient() {
     res.on('finish', () => {
       const statusClass = `${Math.floor((res.statusCode ?? 0) / 100)}xx`;
 
+      if (req.user?.id) {
+        trackActiveUser(req.user);
+      }
+
       state.requestEvents.push({
         method: req.method,
         path: normalizedPath,
