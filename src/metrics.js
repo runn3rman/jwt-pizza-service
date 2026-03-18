@@ -256,6 +256,16 @@ function createMetricsClient() {
   function buildOtlpMetricPayload() {
     const nowMs = Date.now();
     const activeUserCount = Array.from(state.activeUsers.values()).filter((user) => nowMs - user.lastSeen <= 5 * 60_000).length;
+    const latencyByPath = {};
+
+    for (const event of state.requestEvents) {
+      if (!latencyByPath[event.path]) {
+        latencyByPath[event.path] = { totalLatencyMs: 0, count: 0 };
+      }
+
+      latencyByPath[event.path].totalLatencyMs += event.latencyMs;
+      latencyByPath[event.path].count += 1;
+    }
 
     const metrics = [
       createSumMetric(
@@ -289,6 +299,18 @@ function createMetricsClient() {
           value,
           { 'http.response.status_class': statusClass },
           state.lastFlushAtMs,
+          nowMs
+        )
+      );
+    }
+
+    for (const [path, latency] of Object.entries(latencyByPath)) {
+      metrics.push(
+        createGaugeMetric(
+          'jwt_pizza_service_http_request_latency_ms',
+          'Average HTTP request latency in milliseconds by endpoint for the current export window',
+          latency.totalLatencyMs / latency.count,
+          { 'http.route': path },
           nowMs
         )
       );
