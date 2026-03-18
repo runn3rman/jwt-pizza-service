@@ -97,15 +97,36 @@ function createMetricsClient() {
   }
 
   function buildMetricEnvelope() {
+    const requestsByMethod = {};
+    const responsesByStatusClass = {};
+
+    for (const event of state.requestEvents) {
+      requestsByMethod[event.method] = (requestsByMethod[event.method] ?? 0) + 1;
+
+      const statusClass = `${Math.floor((event.statusCode ?? 0) / 100)}xx`;
+      responsesByStatusClass[statusClass] = (responsesByStatusClass[statusClass] ?? 0) + 1;
+    }
+
     return {
       source: config.metrics?.source,
       generatedAt: new Date().toISOString(),
+      http: {
+        totalRequests: state.requestEvents.length,
+        requestsByMethod,
+        responsesByStatusClass,
+      },
       requests: state.requestEvents,
       auth: state.authEvents,
       purchases: state.purchaseEvents,
       activeUsers: Array.from(state.activeUsers.values()),
       system: state.systemSample,
     };
+  }
+
+  function clearFlushedState() {
+    state.requestEvents = [];
+    state.authEvents = [];
+    state.purchaseEvents = [];
   }
 
   async function flush() {
@@ -127,7 +148,10 @@ function createMetricsClient() {
 
       if (!response.ok) {
         console.error(`Failed to flush metrics: ${response.status} ${response.statusText}`);
+        return;
       }
+
+      clearFlushedState();
     } catch (err) {
       console.error('Failed to flush metrics', err.message);
     }
