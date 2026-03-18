@@ -1,6 +1,7 @@
 const config = require('./config.js');
 
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
+const AGGREGATION_TEMPORALITY_DELTA = 1;
 
 function createMetricsClient() {
   const state = {
@@ -11,6 +12,7 @@ function createMetricsClient() {
     systemSample: null,
     flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
     flushTimer: null,
+    lastFlushAtMs: Date.now(),
   };
 
   function isConfigured() {
@@ -96,9 +98,69 @@ function createMetricsClient() {
     };
   }
 
-  function buildMetricEnvelope() {
+  function toUnixNano(timestampMs) {
+    return `${BigInt(timestampMs) * 1_000_000n}`;
+  }
+
+  function createAttributes(attributes = {}) {
+    return Object.entries(attributes).map(([key, value]) => ({
+      key,
+      value: { stringValue: String(value) },
+    }));
+  }
+
+  function createSumMetric(name, description, value, attributes, startTimeMs, endTimeMs) {
+    return {
+      name,
+      description,
+      unit: '1',
+      sum: {
+        aggregationTemporality: AGGREGATION_TEMPORALITY_DELTA,
+        isMonotonic: true,
+        dataPoints: [
+          {
+            attributes: createAttributes(attributes),
+            startTimeUnixNano: toUnixNano(startTimeMs),
+            timeUnixNano: toUnixNano(endTimeMs),
+            asInt: String(value),
+          },
+        ],
+      },
+    };
+  }
+
+  function createGaugeMetric(name, description, value, attributes, endTimeMs) {
+    return {
+      name,
+      description,
+      unit: '1',
+      gauge: {
+        dataPoints: [
+          {
+            attributes: createAttributes(attributes),
+            timeUnixNano: toUnixNano(endTimeMs),
+            asDouble: Number(value),
+          },
+        ],
+      },
+    };
+  }
+
+  function createResourceAttributes() {
+    return createAttributes({
+      'service.name': config.metrics.source,
+      'service.namespace': 'jwt-pizza-service',
+      'deployment.environment': config.metrics.source.endsWith('-dev') ? 'development' : 'production',
+    });
+  }
+
+  function buildOtlpMetricPayload() {
     const requestsByMethod = {};
     const responsesByStatusClass = {};
+    const authAttemptsByResult = {};
+    let pizzasSold = 0;
+    let pizzaFailures = 0;
+    let revenue = 0;
 
     for (const event of state.requestEvents) {
       requestsByMethod[event.method] = (requestsByMethod[event.method] ?? 0) + 1;
@@ -107,19 +169,153 @@ function createMetricsClient() {
       responsesByStatusClass[statusClass] = (responsesByStatusClass[statusClass] ?? 0) + 1;
     }
 
+    for (const event of state.authEvents) {
+      const result = event.success ? 'success' : 'failure';
+      authAttemptsByResult[result] = (authAttemptsByResult[result] ?? 0) + 1;
+    }
+
+    for (const event of state.purchaseEvents) {
+      if (event.success) {
+        pizzasSold += event.itemCount;
+        revenue += event.revenue;
+      } else {
+        pizzaFailures += 1;
+      }
+    }
+
+    const nowMs = Date.now();
+    const activeUserCount = Array.from(state.activeUsers.values()).filter((user) => nowMs - user.lastSeen <= 5 * 60_000).length;
+
+    const metrics = [
+      createSumMetric(
+        'jwt_pizza_service_http_requests',
+        'Total HTTP requests seen during the export interval',
+        state.requestEvents.length,
+        {},
+        state.lastFlushAtMs,
+        nowMs
+      ),
+    ];
+
+    for (const [method, value] of Object.entries(requestsByMethod)) {
+      metrics.push(
+        createSumMetric(
+          'jwt_pizza_service_http_requests',
+          'HTTP requests by method during the export interval',
+          value,
+          { 'http.request.method': method },
+          state.lastFlushAtMs,
+          nowMs
+        )
+      );
+    }
+
+    for (const [statusClass, value] of Object.entries(responsesByStatusClass)) {
+      metrics.push(
+        createSumMetric(
+          'jwt_pizza_service_http_responses',
+          'HTTP responses by status class during the export interval',
+          value,
+          { 'http.response.status_class': statusClass },
+          state.lastFlushAtMs,
+          nowMs
+        )
+      );
+    }
+
+    for (const [result, value] of Object.entries(authAttemptsByResult)) {
+      metrics.push(
+        createSumMetric(
+          'jwt_pizza_service_auth_attempts',
+          'Authentication attempts by result during the export interval',
+          value,
+          { result },
+          state.lastFlushAtMs,
+          nowMs
+        )
+      );
+    }
+
+    metrics.push(
+      createGaugeMetric(
+        'jwt_pizza_service_active_users',
+        'Authenticated users seen in the last five minutes',
+        activeUserCount,
+        {},
+        nowMs
+      )
+    );
+
+    metrics.push(
+      createSumMetric(
+        'jwt_pizza_service_pizzas_sold',
+        'Pizza items sold during the export interval',
+        pizzasSold,
+        {},
+        state.lastFlushAtMs,
+        nowMs
+      )
+    );
+
+    metrics.push(
+      createSumMetric(
+        'jwt_pizza_service_pizza_creation_failures',
+        'Pizza creation failures during the export interval',
+        pizzaFailures,
+        {},
+        state.lastFlushAtMs,
+        nowMs
+      )
+    );
+
+    metrics.push(
+      createGaugeMetric(
+        'jwt_pizza_service_revenue',
+        'Revenue observed during the export interval',
+        revenue,
+        {},
+        nowMs
+      )
+    );
+
+    if (state.systemSample) {
+      metrics.push(
+        createGaugeMetric(
+          'jwt_pizza_service_cpu_usage_percent',
+          'CPU usage percentage',
+          state.systemSample.cpuPercent,
+          {},
+          nowMs
+        )
+      );
+      metrics.push(
+        createGaugeMetric(
+          'jwt_pizza_service_memory_usage_percent',
+          'Memory usage percentage',
+          state.systemSample.memoryPercent,
+          {},
+          nowMs
+        )
+      );
+    }
+
     return {
-      source: config.metrics?.source,
-      generatedAt: new Date().toISOString(),
-      http: {
-        totalRequests: state.requestEvents.length,
-        requestsByMethod,
-        responsesByStatusClass,
-      },
-      requests: state.requestEvents,
-      auth: state.authEvents,
-      purchases: state.purchaseEvents,
-      activeUsers: Array.from(state.activeUsers.values()),
-      system: state.systemSample,
+      resourceMetrics: [
+        {
+          resource: {
+            attributes: createResourceAttributes(),
+          },
+          scopeMetrics: [
+            {
+              scope: {
+                name: 'jwt-pizza-service.metrics',
+                version: '1.0.0',
+              },
+              metrics,
+            },
+          ],
+        },
+      ],
     };
   }
 
@@ -127,6 +323,7 @@ function createMetricsClient() {
     state.requestEvents = [];
     state.authEvents = [];
     state.purchaseEvents = [];
+    state.lastFlushAtMs = Date.now();
   }
 
   async function flush() {
@@ -134,16 +331,17 @@ function createMetricsClient() {
       return;
     }
 
-    const envelope = buildMetricEnvelope();
+    const payload = buildOtlpMetricPayload();
 
     try {
       const response = await fetch(config.metrics.endpointUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Accept: 'application/json',
           Authorization: `Basic ${Buffer.from(`${config.metrics.accountId}:${config.metrics.apiKey}`).toString('base64')}`,
         },
-        body: JSON.stringify(envelope),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
