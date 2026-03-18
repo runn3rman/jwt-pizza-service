@@ -252,6 +252,26 @@ function createMetricsClient() {
     };
   }
 
+  function createDoubleSumMetric(name, description, value, attributes, startTimeMs, endTimeMs) {
+    return {
+      name,
+      description,
+      unit: '1',
+      sum: {
+        aggregationTemporality: AGGREGATION_TEMPORALITY_CUMULATIVE,
+        isMonotonic: true,
+        dataPoints: [
+          {
+            attributes: createAttributes(attributes),
+            startTimeUnixNano: toUnixNano(startTimeMs),
+            timeUnixNano: toUnixNano(endTimeMs),
+            asDouble: Number(value),
+          },
+        ],
+      },
+    };
+  }
+
   function createGaugeMetric(name, description, value, attributes, endTimeMs) {
     return {
       name,
@@ -281,6 +301,8 @@ function createMetricsClient() {
     const nowMs = Date.now();
     const activeUserCount = Array.from(state.activeUsers.values()).filter((user) => nowMs - user.lastSeen <= 5 * 60_000).length;
     const latencyByPath = {};
+    let pizzaLatencyTotalMs = 0;
+    let pizzaLatencyCount = 0;
 
     for (const event of state.requestEvents) {
       if (!latencyByPath[event.path]) {
@@ -289,6 +311,11 @@ function createMetricsClient() {
 
       latencyByPath[event.path].totalLatencyMs += event.latencyMs;
       latencyByPath[event.path].count += 1;
+    }
+
+    for (const event of state.purchaseEvents) {
+      pizzaLatencyTotalMs += event.latencyMs;
+      pizzaLatencyCount += 1;
     }
 
     const metrics = [
@@ -386,14 +413,27 @@ function createMetricsClient() {
     );
 
     metrics.push(
-      createGaugeMetric(
+      createDoubleSumMetric(
         'jwt_pizza_service_revenue',
         'Revenue observed by the service',
         state.totals.revenue,
         {},
+        state.lastFlushAtMs,
         nowMs
       )
     );
+
+    if (pizzaLatencyCount > 0) {
+      metrics.push(
+        createGaugeMetric(
+          'jwt_pizza_service_pizza_creation_latency_ms',
+          'Average pizza creation latency in milliseconds for the current export window',
+          pizzaLatencyTotalMs / pizzaLatencyCount,
+          {},
+          nowMs
+        )
+      );
+    }
 
     if (state.systemSample) {
       metrics.push(
