@@ -1,7 +1,7 @@
 const config = require('./config.js');
 
 const DEFAULT_FLUSH_INTERVAL_MS = 60_000;
-const AGGREGATION_TEMPORALITY_DELTA = 1;
+const AGGREGATION_TEMPORALITY_CUMULATIVE = 2;
 
 function createMetricsClient() {
   const state = {
@@ -13,6 +13,15 @@ function createMetricsClient() {
     flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
     flushTimer: null,
     lastFlushAtMs: Date.now(),
+    totals: {
+      requests: 0,
+      requestsByMethod: {},
+      responsesByStatusClass: {},
+      authAttemptsByResult: {},
+      pizzasSold: 0,
+      pizzaFailures: 0,
+      revenue: 0,
+    },
   };
 
   function isConfigured() {
@@ -32,6 +41,8 @@ function createMetricsClient() {
     const startedAt = Date.now();
 
     res.on('finish', () => {
+      const statusClass = `${Math.floor((res.statusCode ?? 0) / 100)}xx`;
+
       state.requestEvents.push({
         method: req.method,
         path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
@@ -39,6 +50,10 @@ function createMetricsClient() {
         latencyMs: Date.now() - startedAt,
         timestamp: Date.now(),
       });
+
+      state.totals.requests += 1;
+      state.totals.requestsByMethod[req.method] = (state.totals.requestsByMethod[req.method] ?? 0) + 1;
+      state.totals.responsesByStatusClass[statusClass] = (state.totals.responsesByStatusClass[statusClass] ?? 0) + 1;
     });
 
     next();
@@ -54,6 +69,9 @@ function createMetricsClient() {
       success: !!event?.success,
       timestamp: Date.now(),
     });
+
+    const result = event?.success ? 'success' : 'failure';
+    state.totals.authAttemptsByResult[result] = (state.totals.authAttemptsByResult[result] ?? 0) + 1;
   }
 
   function trackActiveUser(user) {
@@ -84,6 +102,13 @@ function createMetricsClient() {
       revenue: Number(event?.revenue ?? 0),
       timestamp: Date.now(),
     });
+
+    if (event?.success) {
+      state.totals.pizzasSold += Number(event?.itemCount ?? 0);
+      state.totals.revenue += Number(event?.revenue ?? 0);
+    } else {
+      state.totals.pizzaFailures += 1;
+    }
   }
 
   function collectSystemMetrics(sample) {
@@ -96,6 +121,46 @@ function createMetricsClient() {
       memoryPercent: Number(sample?.memoryPercent ?? 0),
       timestamp: Date.now(),
     };
+  }
+
+  function recordIngestionTestMetrics() {
+    if (!isEnabled()) {
+      return false;
+    }
+
+    state.requestEvents.push({
+      method: 'TEST',
+      path: '/metrics/ingestion-check',
+      statusCode: 200,
+      latencyMs: 123,
+      timestamp: Date.now(),
+    });
+    state.totals.requests += 1;
+    state.totals.requestsByMethod.TEST = (state.totals.requestsByMethod.TEST ?? 0) + 1;
+    state.totals.responsesByStatusClass['2xx'] = (state.totals.responsesByStatusClass['2xx'] ?? 0) + 1;
+
+    state.authEvents.push({
+      action: 'ingestion-check',
+      success: true,
+      timestamp: Date.now(),
+    });
+    state.totals.authAttemptsByResult.success = (state.totals.authAttemptsByResult.success ?? 0) + 1;
+
+    state.activeUsers.set('ingestion-check-user', {
+      userId: 'ingestion-check-user',
+      email: 'ingestion-check@jwt-pizza-service.local',
+      lastSeen: Date.now(),
+    });
+
+    state.systemSample = {
+      cpuPercent: 12.34,
+      memoryPercent: 45.67,
+      timestamp: Date.now(),
+    };
+    state.totals.pizzasSold += 2;
+    state.totals.revenue += 19.98;
+
+    return true;
   }
 
   function toUnixNano(timestampMs) {
@@ -115,7 +180,7 @@ function createMetricsClient() {
       description,
       unit: '1',
       sum: {
-        aggregationTemporality: AGGREGATION_TEMPORALITY_DELTA,
+        aggregationTemporality: AGGREGATION_TEMPORALITY_CUMULATIVE,
         isMonotonic: true,
         dataPoints: [
           {
@@ -155,53 +220,25 @@ function createMetricsClient() {
   }
 
   function buildOtlpMetricPayload() {
-    const requestsByMethod = {};
-    const responsesByStatusClass = {};
-    const authAttemptsByResult = {};
-    let pizzasSold = 0;
-    let pizzaFailures = 0;
-    let revenue = 0;
-
-    for (const event of state.requestEvents) {
-      requestsByMethod[event.method] = (requestsByMethod[event.method] ?? 0) + 1;
-
-      const statusClass = `${Math.floor((event.statusCode ?? 0) / 100)}xx`;
-      responsesByStatusClass[statusClass] = (responsesByStatusClass[statusClass] ?? 0) + 1;
-    }
-
-    for (const event of state.authEvents) {
-      const result = event.success ? 'success' : 'failure';
-      authAttemptsByResult[result] = (authAttemptsByResult[result] ?? 0) + 1;
-    }
-
-    for (const event of state.purchaseEvents) {
-      if (event.success) {
-        pizzasSold += event.itemCount;
-        revenue += event.revenue;
-      } else {
-        pizzaFailures += 1;
-      }
-    }
-
     const nowMs = Date.now();
     const activeUserCount = Array.from(state.activeUsers.values()).filter((user) => nowMs - user.lastSeen <= 5 * 60_000).length;
 
     const metrics = [
       createSumMetric(
         'jwt_pizza_service_http_requests',
-        'Total HTTP requests seen during the export interval',
-        state.requestEvents.length,
+        'Total HTTP requests seen by the service',
+        state.totals.requests,
         {},
         state.lastFlushAtMs,
         nowMs
       ),
     ];
 
-    for (const [method, value] of Object.entries(requestsByMethod)) {
+    for (const [method, value] of Object.entries(state.totals.requestsByMethod)) {
       metrics.push(
         createSumMetric(
           'jwt_pizza_service_http_requests',
-          'HTTP requests by method during the export interval',
+          'HTTP requests by method seen by the service',
           value,
           { 'http.request.method': method },
           state.lastFlushAtMs,
@@ -210,11 +247,11 @@ function createMetricsClient() {
       );
     }
 
-    for (const [statusClass, value] of Object.entries(responsesByStatusClass)) {
+    for (const [statusClass, value] of Object.entries(state.totals.responsesByStatusClass)) {
       metrics.push(
         createSumMetric(
           'jwt_pizza_service_http_responses',
-          'HTTP responses by status class during the export interval',
+          'HTTP responses by status class seen by the service',
           value,
           { 'http.response.status_class': statusClass },
           state.lastFlushAtMs,
@@ -223,11 +260,11 @@ function createMetricsClient() {
       );
     }
 
-    for (const [result, value] of Object.entries(authAttemptsByResult)) {
+    for (const [result, value] of Object.entries(state.totals.authAttemptsByResult)) {
       metrics.push(
         createSumMetric(
           'jwt_pizza_service_auth_attempts',
-          'Authentication attempts by result during the export interval',
+          'Authentication attempts by result seen by the service',
           value,
           { result },
           state.lastFlushAtMs,
@@ -249,8 +286,8 @@ function createMetricsClient() {
     metrics.push(
       createSumMetric(
         'jwt_pizza_service_pizzas_sold',
-        'Pizza items sold during the export interval',
-        pizzasSold,
+        'Pizza items sold by the service',
+        state.totals.pizzasSold,
         {},
         state.lastFlushAtMs,
         nowMs
@@ -260,8 +297,8 @@ function createMetricsClient() {
     metrics.push(
       createSumMetric(
         'jwt_pizza_service_pizza_creation_failures',
-        'Pizza creation failures during the export interval',
-        pizzaFailures,
+        'Pizza creation failures seen by the service',
+        state.totals.pizzaFailures,
         {},
         state.lastFlushAtMs,
         nowMs
@@ -271,8 +308,8 @@ function createMetricsClient() {
     metrics.push(
       createGaugeMetric(
         'jwt_pizza_service_revenue',
-        'Revenue observed during the export interval',
-        revenue,
+        'Revenue observed by the service',
+        state.totals.revenue,
         {},
         nowMs
       )
@@ -323,7 +360,6 @@ function createMetricsClient() {
     state.requestEvents = [];
     state.authEvents = [];
     state.purchaseEvents = [];
-    state.lastFlushAtMs = Date.now();
   }
 
   async function flush() {
@@ -345,7 +381,8 @@ function createMetricsClient() {
       });
 
       if (!response.ok) {
-        console.error(`Failed to flush metrics: ${response.status} ${response.statusText}`);
+        const errorBody = await response.text();
+        console.error(`Failed to flush metrics: ${response.status} ${response.statusText} ${errorBody}`);
         return;
       }
 
@@ -383,6 +420,7 @@ function createMetricsClient() {
     collectSystemMetrics,
     startReporter,
     flush,
+    recordIngestionTestMetrics,
     isConfigured,
     isEnabled,
   };
