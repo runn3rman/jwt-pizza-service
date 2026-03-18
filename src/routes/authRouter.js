@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const config = require('../config.js');
+const metrics = require('../metrics.js');
 const { asyncHandler } = require('../endpointHelper.js');
 const { DB, Role } = require('../database/database.js');
 
@@ -59,13 +60,21 @@ authRouter.authenticateToken = (req, res, next) => {
 authRouter.post(
   '/',
   asyncHandler(async (req, res) => {
-    const { name, email, password } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'name, email, and password are required' });
+    try {
+      const { name, email, password } = req.body;
+      if (!name || !email || !password) {
+        metrics.trackAuthAttempt({ action: 'register', success: false });
+        return res.status(400).json({ message: 'name, email, and password are required' });
+      }
+
+      const user = await DB.addUser({ name, email, password, roles: [{ role: Role.Diner }] });
+      const auth = await setAuth(user);
+      metrics.trackAuthAttempt({ action: 'register', success: true });
+      res.json({ user: user, token: auth });
+    } catch (err) {
+      metrics.trackAuthAttempt({ action: 'register', success: false });
+      throw err;
     }
-    const user = await DB.addUser({ name, email, password, roles: [{ role: Role.Diner }] });
-    const auth = await setAuth(user);
-    res.json({ user: user, token: auth });
   })
 );
 
@@ -73,10 +82,16 @@ authRouter.post(
 authRouter.put(
   '/',
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
-    const user = await DB.getUser(email, password);
-    const auth = await setAuth(user);
-    res.json({ user: user, token: auth });
+    try {
+      const { email, password } = req.body;
+      const user = await DB.getUser(email, password);
+      const auth = await setAuth(user);
+      metrics.trackAuthAttempt({ action: 'login', success: true });
+      res.json({ user: user, token: auth });
+    } catch (err) {
+      metrics.trackAuthAttempt({ action: 'login', success: false });
+      throw err;
+    }
   })
 );
 
