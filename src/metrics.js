@@ -32,6 +32,38 @@ function createMetricsClient() {
     return isConfigured() && typeof fetch === 'function';
   }
 
+  function normalizePath(pathname = '/') {
+    if (pathname === '/') {
+      return '/';
+    }
+
+    if (pathname.startsWith('/api/auth')) {
+      return '/api/auth';
+    }
+
+    if (pathname.startsWith('/api/order/menu')) {
+      return '/api/order/menu';
+    }
+
+    if (pathname.startsWith('/api/order')) {
+      return '/api/order';
+    }
+
+    if (pathname.startsWith('/api/user')) {
+      return '/api/user';
+    }
+
+    if (pathname.startsWith('/api/franchise')) {
+      return '/api/franchise';
+    }
+
+    if (pathname.startsWith('/api/docs')) {
+      return '/api/docs';
+    }
+
+    return pathname;
+  }
+
   function requestTracker(req, res, next) {
     if (!isEnabled()) {
       next();
@@ -39,14 +71,16 @@ function createMetricsClient() {
     }
 
     const startedAt = Date.now();
+    const normalizedPath = normalizePath(req.path || req.originalUrl || '/');
 
     res.on('finish', () => {
       const statusClass = `${Math.floor((res.statusCode ?? 0) / 100)}xx`;
 
       state.requestEvents.push({
         method: req.method,
-        path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
+        path: normalizedPath,
         statusCode: res.statusCode,
+        statusClass,
         latencyMs: Date.now() - startedAt,
         timestamp: Date.now(),
       });
