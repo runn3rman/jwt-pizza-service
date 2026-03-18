@@ -17,11 +17,19 @@ function createMetricsClient() {
     return !!(config.metrics?.endpointUrl && config.metrics?.accountId && config.metrics?.apiKey && config.metrics?.source);
   }
 
+  function isEnabled() {
+    return isConfigured() && typeof fetch === 'function';
+  }
+
   function requestTracker(req, res, next) {
     next();
   }
 
   function trackAuthAttempt(event) {
+    if (!isEnabled()) {
+      return;
+    }
+
     state.authEvents.push({
       action: event?.action ?? 'unknown',
       success: !!event?.success,
@@ -30,6 +38,10 @@ function createMetricsClient() {
   }
 
   function trackActiveUser(user) {
+    if (!isEnabled()) {
+      return;
+    }
+
     if (!user?.id) {
       return;
     }
@@ -42,6 +54,10 @@ function createMetricsClient() {
   }
 
   function trackPizzaPurchase(event) {
+    if (!isEnabled()) {
+      return;
+    }
+
     state.purchaseEvents.push({
       success: !!event?.success,
       latencyMs: Number(event?.latencyMs ?? 0),
@@ -52,6 +68,10 @@ function createMetricsClient() {
   }
 
   function collectSystemMetrics(sample) {
+    if (!isEnabled()) {
+      return;
+    }
+
     state.systemSample = {
       cpuPercent: Number(sample?.cpuPercent ?? 0),
       memoryPercent: Number(sample?.memoryPercent ?? 0),
@@ -72,23 +92,35 @@ function createMetricsClient() {
   }
 
   async function flush() {
-    if (!isConfigured()) {
+    if (!isEnabled()) {
       return;
     }
 
     const envelope = buildMetricEnvelope();
 
-    await fetch(config.metrics.endpointUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Basic ${Buffer.from(`${config.metrics.accountId}:${config.metrics.apiKey}`).toString('base64')}`,
-      },
-      body: JSON.stringify(envelope),
-    });
+    try {
+      const response = await fetch(config.metrics.endpointUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Basic ${Buffer.from(`${config.metrics.accountId}:${config.metrics.apiKey}`).toString('base64')}`,
+        },
+        body: JSON.stringify(envelope),
+      });
+
+      if (!response.ok) {
+        console.error(`Failed to flush metrics: ${response.status} ${response.statusText}`);
+      }
+    } catch (err) {
+      console.error('Failed to flush metrics', err.message);
+    }
   }
 
   function startReporter(intervalMs = DEFAULT_FLUSH_INTERVAL_MS) {
+    if (!isEnabled()) {
+      return;
+    }
+
     state.flushIntervalMs = intervalMs;
 
     if (state.flushTimer) {
@@ -96,9 +128,7 @@ function createMetricsClient() {
     }
 
     state.flushTimer = setInterval(() => {
-      flush().catch((err) => {
-        console.error('Failed to flush metrics', err.message);
-      });
+      flush();
     }, state.flushIntervalMs);
 
     if (typeof state.flushTimer.unref === 'function') {
@@ -114,6 +144,8 @@ function createMetricsClient() {
     collectSystemMetrics,
     startReporter,
     flush,
+    isConfigured,
+    isEnabled,
   };
 }
 
