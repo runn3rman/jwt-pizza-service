@@ -5,4 +5,5 @@ config.js
 src/config.js
 coverage
 dist
-grafanaconfig.js
+grafanaConfig.js
+generatePizzaTraffic.sh
