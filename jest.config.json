@@ -1,6 +1,8 @@
 {
   "collectCoverage": true,
   "coverageReporters": ["json-summary", "text"],
+  "testPathIgnorePatterns": ["<rootDir>/dist/"],
+  "coveragePathIgnorePatterns": ["<rootDir>/dist/"],
   "coverageThreshold": {
     "global": {
       "lines": 80
