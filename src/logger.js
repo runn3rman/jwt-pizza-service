@@ -11,7 +11,7 @@ function createLoggerClient() {
   }
 
   function isEnabled() {
-    return isConfigured() && typeof fetch === 'function';
+    return process.env.NODE_ENV !== 'test' && isConfigured() && typeof fetch === 'function';
   }
 
   function sanitize(value) {
