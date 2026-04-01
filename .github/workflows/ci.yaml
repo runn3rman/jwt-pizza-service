@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22.x'
 
@@ -36,7 +36,8 @@ jobs:
 
       - name: Write config file
         run: |
-          echo "module.exports = {
+          cat > src/config.js <<EOF
+          module.exports = {
             jwtSecret: '${{ secrets.JWT_SECRET }}',
             db: {
               connection: {
@@ -64,7 +65,8 @@ jobs:
               accountId: '${{ secrets.LOGGING_ACCOUNT_ID }}',
               apiKey: '${{ secrets.LOGGING_API_KEY }}',
             },
-          };" > src/config.js
+          };
+          EOF
 
       - name: Lint
         run: npm run lint
