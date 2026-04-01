@@ -1,6 +1,7 @@
 const express = require('express');
 const config = require('../config.js');
 const metrics = require('../metrics.js');
+const logger = require('../logger.js');
 const { Role, DB } = require('../database/database.js');
 const { authRouter } = require('./authRouter.js');
 const { asyncHandler, StatusCodeError } = require('../endpointHelper.js');
@@ -83,13 +84,44 @@ orderRouter.post(
     const factoryRequestStartedAt = Date.now();
     const itemCount = Array.isArray(order.items) ? order.items.length : 0;
     const revenue = Array.isArray(order.items) ? order.items.reduce((sum, item) => sum + Number(item.price ?? 0), 0) : 0;
-    const r = await fetch(`${config.factory.url}/api/order`, {
+    const factoryRequestBody = { diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order };
+    logger.log('info', 'factory', {
+      direction: 'request',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${config.factory.apiKey}` },
-      body: JSON.stringify({ diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order }),
+      path: `${config.factory.url}/api/order`,
+      body: factoryRequestBody,
     });
+
+    let r;
+    try {
+      r = await fetch(`${config.factory.url}/api/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${config.factory.apiKey}` },
+        body: JSON.stringify(factoryRequestBody),
+      });
+    } catch (err) {
+      logger.log('error', 'factory', {
+        direction: 'response',
+        method: 'POST',
+        path: `${config.factory.url}/api/order`,
+        success: false,
+        error: err.message,
+      });
+      throw err;
+    }
+
     const factoryLatencyMs = Date.now() - factoryRequestStartedAt;
     const j = await r.json();
+    logger.log(r.ok ? 'info' : 'error', 'factory', {
+      direction: 'response',
+      method: 'POST',
+      path: `${config.factory.url}/api/order`,
+      statusCode: r.status ?? (r.ok ? 200 : 500),
+      latencyMs: factoryLatencyMs,
+      success: r.ok,
+      body: j,
+    });
+
     if (r.ok) {
       metrics.trackPizzaPurchase({
         success: true,
