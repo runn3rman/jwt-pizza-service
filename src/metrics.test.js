@@ -87,6 +87,8 @@ describe('metrics', () => {
     metrics.trackActiveUser({ id: 99, email: 'u@test.com' });
     metrics.trackPizzaPurchase({ success: true, latencyMs: 150, itemCount: 3, revenue: 12.5 });
     metrics.trackPizzaPurchase({ success: false, latencyMs: 350, itemCount: 0, revenue: 0 });
+    metrics.trackChaos({ enabled: true });
+    metrics.trackChaos({ enabled: true, injectedFailure: true });
     metrics.collectSystemMetricsSnapshot();
 
     await metrics.flush();
@@ -102,6 +104,9 @@ describe('metrics', () => {
     expect(metricByName.jwt_pizza_service_auth_attempts.sum).toBeDefined();
     expect(metricByName.jwt_pizza_service_pizzas_sold.sum).toBeDefined();
     expect(metricByName.jwt_pizza_service_pizza_creation_failures.sum).toBeDefined();
+    expect(metricByName.jwt_pizza_service_chaos_failures.sum).toBeDefined();
+    expect(metricByName.jwt_pizza_service_chaos_state_changes.sum).toBeDefined();
+    expect(metricByName.jwt_pizza_service_chaos_enabled.gauge).toBeDefined();
     expect(metricByName.jwt_pizza_service_revenue.sum).toBeDefined();
     expect(metricByName.jwt_pizza_service_cpu_usage_percent.gauge).toBeDefined();
     expect(metricByName.jwt_pizza_service_memory_usage_percent.gauge).toBeDefined();
@@ -109,6 +114,9 @@ describe('metrics', () => {
 
     const revenuePoint = metricByName.jwt_pizza_service_revenue.sum.dataPoints[0];
     expect(revenuePoint.asDouble).toBe(12.5);
+
+    const chaosPoint = metricByName.jwt_pizza_service_chaos_enabled.gauge.dataPoints[0];
+    expect(chaosPoint.asDouble).toBe(1);
   });
 
   test('recordIngestionTestMetrics seeds metrics and flushes successfully', async () => {
@@ -124,6 +132,7 @@ describe('metrics', () => {
     expect(metricNames).toContain('jwt_pizza_service_http_requests');
     expect(metricNames).toContain('jwt_pizza_service_auth_attempts');
     expect(metricNames).toContain('jwt_pizza_service_cpu_usage_percent');
+    expect(metricNames).toContain('jwt_pizza_service_chaos_failures');
   });
 
   test('flush logs server errors and continues without throwing', async () => {

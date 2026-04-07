@@ -7,6 +7,7 @@ const { authRouter } = require('./authRouter.js');
 const { asyncHandler, StatusCodeError } = require('../endpointHelper.js');
 
 const orderRouter = express.Router();
+let enableChaos = false;
 
 orderRouter.docs = [
   {
@@ -39,6 +40,14 @@ orderRouter.docs = [
     description: 'Create a order for the authenticated user',
     example: `curl -X POST localhost:3000/api/order -H 'Content-Type: application/json' -d '{"franchiseId": 1, "storeId":1, "items":[{ "menuId": 1, "description": "Veggie", "price": 0.05 }]}'  -H 'Authorization: Bearer tttttt'`,
     response: { order: { franchiseId: 1, storeId: 1, items: [{ menuId: 1, description: 'Veggie', price: 0.05 }], id: 1 }, jwt: '1111111111' },
+  },
+  {
+    method: 'PUT',
+    path: '/api/order/chaos/:state',
+    requiresAuth: true,
+    description: 'Enable or disable random order failures for chaos testing. Admin only.',
+    example: `curl -X PUT localhost:3000/api/order/chaos/true -H 'Authorization: Bearer tttttt'`,
+    response: { chaos: true },
   },
 ];
 
@@ -74,10 +83,39 @@ orderRouter.get(
   })
 );
 
+orderRouter.put(
+  '/chaos/:state',
+  authRouter.authenticateToken,
+  asyncHandler(async (req, res) => {
+    if (!req.user.isRole(Role.Admin)) {
+      throw new StatusCodeError('unable to configure chaos testing', 403);
+    }
+
+    enableChaos = req.params.state === 'true';
+    metrics.trackChaos({ enabled: enableChaos });
+
+    res.json({ chaos: enableChaos });
+  })
+);
+
 // createOrder
 orderRouter.post(
   '/',
   authRouter.authenticateToken,
+  (req, res, next) => {
+    if (enableChaos && Math.random() < 0.5) {
+      metrics.trackChaos({ enabled: true, injectedFailure: true });
+      metrics.trackPizzaPurchase({
+        success: false,
+        latencyMs: 0,
+        itemCount: 0,
+        revenue: 0,
+      });
+      return next(new StatusCodeError('Chaos monkey', 500));
+    }
+
+    next();
+  },
   asyncHandler(async (req, res) => {
     const orderReq = req.body;
     const order = await DB.addDinerOrder(req.user, orderReq);

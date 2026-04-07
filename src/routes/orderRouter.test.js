@@ -63,6 +63,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   global.fetch = jest.fn();
+  jest.restoreAllMocks();
 });
 
 afterEach(() => {
@@ -116,6 +117,34 @@ test('create order success and failure paths', async () => {
     .set('Authorization', `Bearer ${diner.token}`)
     .send({ franchiseId, storeId, items: [{ menuId, description: 'test', price: 0.01 }] });
   expect(failRes.status).toBe(500);
+});
+
+test('chaos toggle is admin-only and chaos can inject order failures', async () => {
+  const dinerToggleRes = await request(app)
+    .put('/api/order/chaos/true')
+    .set('Authorization', `Bearer ${diner.token}`);
+  expect(dinerToggleRes.status).toBe(403);
+
+  const adminToggleRes = await request(app)
+    .put('/api/order/chaos/true')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(adminToggleRes.status).toBe(200);
+  expect(adminToggleRes.body).toEqual({ chaos: true });
+
+  jest.spyOn(Math, 'random').mockReturnValue(0.1);
+  const chaosOrderRes = await request(app)
+    .post('/api/order')
+    .set('Authorization', `Bearer ${diner.token}`)
+    .send({ franchiseId, storeId, items: [{ menuId, description: 'test', price: 0.01 }] });
+  expect(chaosOrderRes.status).toBe(500);
+  expect(chaosOrderRes.body.message).toBe('Chaos monkey');
+  expect(global.fetch).not.toHaveBeenCalled();
+
+  const disableChaosRes = await request(app)
+    .put('/api/order/chaos/false')
+    .set('Authorization', `Bearer ${adminToken}`);
+  expect(disableChaosRes.status).toBe(200);
+  expect(disableChaosRes.body).toEqual({ chaos: false });
 });
 
 test('get orders for diner', async () => {

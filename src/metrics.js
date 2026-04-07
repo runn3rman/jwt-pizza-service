@@ -9,6 +9,7 @@ function createMetricsClient() {
     requestEvents: [],
     authEvents: [],
     purchaseEvents: [],
+    chaosEvents: [],
     activeUsers: new Map(),
     systemSample: null,
     flushIntervalMs: DEFAULT_FLUSH_INTERVAL_MS,
@@ -21,6 +22,8 @@ function createMetricsClient() {
       authAttemptsByResult: {},
       pizzasSold: 0,
       pizzaFailures: 0,
+      chaosFailures: 0,
+      chaosStateChanges: 0,
       revenue: 0,
     },
   };
@@ -150,6 +153,29 @@ function createMetricsClient() {
     }
   }
 
+  function trackChaos(event) {
+    if (!isEnabled()) {
+      return;
+    }
+
+    const enabled = !!event?.enabled;
+    const injectedFailure = !!event?.injectedFailure;
+
+    state.chaosEvents.push({
+      enabled,
+      injectedFailure,
+      timestamp: Date.now(),
+    });
+
+    if (Object.prototype.hasOwnProperty.call(event ?? {}, 'enabled')) {
+      state.totals.chaosStateChanges += 1;
+    }
+
+    if (injectedFailure) {
+      state.totals.chaosFailures += 1;
+    }
+  }
+
   function collectSystemMetrics(sample) {
     if (!isEnabled()) {
       return;
@@ -215,6 +241,8 @@ function createMetricsClient() {
       memoryPercent: 45.67,
       timestamp: Date.now(),
     };
+    state.totals.chaosStateChanges += 1;
+    state.totals.chaosFailures += 1;
     state.totals.pizzasSold += 2;
     state.totals.revenue += 19.98;
 
@@ -381,6 +409,48 @@ function createMetricsClient() {
 
     metrics.push(
       {
+        name: 'jwt_pizza_service_chaos_failures',
+        description: 'Injected order failures caused by chaos mode',
+        unit: '1',
+        type: 'sum',
+        valueType: 'int',
+        value: state.totals.chaosFailures,
+        attributes: {},
+        startTimeMs: state.lastFlushAtMs,
+        endTimeMs: nowMs,
+      }
+    );
+
+    metrics.push(
+      {
+        name: 'jwt_pizza_service_chaos_state_changes',
+        description: 'Chaos mode state changes performed by admins',
+        unit: '1',
+        type: 'sum',
+        valueType: 'int',
+        value: state.totals.chaosStateChanges,
+        attributes: {},
+        startTimeMs: state.lastFlushAtMs,
+        endTimeMs: nowMs,
+      }
+    );
+
+    const latestChaosEvent = state.chaosEvents.at(-1);
+    metrics.push(
+      {
+        name: 'jwt_pizza_service_chaos_enabled',
+        description: 'Whether chaos mode is currently enabled',
+        unit: '1',
+        type: 'gauge',
+        valueType: 'double',
+        value: latestChaosEvent?.enabled ? 1 : 0,
+        attributes: {},
+        endTimeMs: nowMs,
+      }
+    );
+
+    metrics.push(
+      {
         name: 'jwt_pizza_service_revenue',
         description: 'Revenue observed by the service',
         unit: 'usd',
@@ -515,6 +585,7 @@ function createMetricsClient() {
     state.requestEvents = [];
     state.authEvents = [];
     state.purchaseEvents = [];
+    state.chaosEvents = state.chaosEvents.slice(-1);
   }
 
   async function flush() {
@@ -562,6 +633,7 @@ function createMetricsClient() {
     trackAuthAttempt,
     trackActiveUser,
     trackPizzaPurchase,
+    trackChaos,
     collectSystemMetrics,
     collectSystemMetricsSnapshot,
     startReporter,
