@@ -96,6 +96,6 @@ test('non-admin non-franchise-admin cannot create store', async () => {
 });
 
 test('delete franchise', async () => {
-  const res = await request(app).delete(`/api/franchise/${franchiseId}`);
+  const res = await request(app).delete(`/api/franchise/${franchiseId}`).set('Authorization', `Bearer ${adminToken}`);
   expect(res.status).toBe(200);
 });
