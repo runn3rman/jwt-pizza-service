@@ -1,11 +1,20 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const config = require('../config.js');
 const metrics = require('../metrics.js');
 const { asyncHandler } = require('../endpointHelper.js');
 const { DB, Role } = require('../database/database.js');
 
 const authRouter = express.Router();
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please try again later' },
+});
 
 authRouter.docs = [
   {
@@ -38,7 +47,7 @@ async function setAuthUser(req, res, next) {
     try {
       if (await DB.isLoggedIn(token)) {
         // Check the database to make sure the token is valid.
-        req.user = jwt.verify(token, config.jwtSecret);
+        req.user = jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] });
         req.user.isRole = (role) => !!req.user.roles.find((r) => r.role === role);
       }
     } catch {
@@ -59,6 +68,7 @@ authRouter.authenticateToken = (req, res, next) => {
 // register
 authRouter.post(
   '/',
+  authLimiter,
   asyncHandler(async (req, res) => {
     try {
       const { name, email, password } = req.body;
@@ -81,6 +91,7 @@ authRouter.post(
 // login
 authRouter.put(
   '/',
+  authLimiter,
   asyncHandler(async (req, res) => {
     try {
       const { email, password } = req.body;
@@ -106,7 +117,7 @@ authRouter.delete(
 );
 
 async function setAuth(user) {
-  const token = jwt.sign(user, config.jwtSecret, { expiresIn: '1d' });
+  const token = jwt.sign(user, config.jwtSecret, { expiresIn: '1d', algorithm: 'HS256' });
   await DB.loginUser(user.id, token);
   return token;
 }

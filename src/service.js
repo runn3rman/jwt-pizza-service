@@ -1,19 +1,23 @@
 const express = require('express');
+const helmet = require('helmet');
 const { authRouter, setAuthUser } = require('./routes/authRouter.js');
 const orderRouter = require('./routes/orderRouter.js');
 const franchiseRouter = require('./routes/franchiseRouter.js');
 const userRouter = require('./routes/userRouter.js');
 const version = require('./version.json');
-const config = require('./config.js');
 const metrics = require('./metrics.js');
 const logger = require('./logger.js');
 
 const app = express();
+app.use(helmet());
 app.use(express.json());
 app.use(logger.httpLogger);
 app.use(metrics.requestTracker);
 app.use(setAuthUser);
-const ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:3000', 'https://pizza.329pizzas.click'];
+const ALLOWED_ORIGINS =
+  process.env.NODE_ENV === 'production'
+    ? ['https://pizza.329pizzas.click']
+    : ['http://localhost:5173', 'http://localhost:3000', 'https://pizza.329pizzas.click'];
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -36,7 +40,6 @@ apiRouter.use('/docs', (req, res) => {
   res.json({
     version: version.version,
     endpoints: [...authRouter.docs, ...userRouter.docs, ...orderRouter.docs, ...franchiseRouter.docs],
-    config: { factory: config.factory.url, db: config.db.connection.host },
   });
 });
 

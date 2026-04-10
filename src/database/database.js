@@ -136,6 +136,7 @@ class DB {
   }
 
   async getOrders(user, page = 1) {
+    page = Math.max(1, parseInt(page) || 1);
     const connection = await this.getConnection();
     try {
       const offset = this.getOffset(page, config.db.listPerPage);
@@ -211,6 +212,8 @@ class DB {
   }
 
   async getFranchises(authUser, page = 0, limit = 10, nameFilter = '*') {
+    page = Math.max(0, parseInt(page) || 0);
+    limit = Math.min(100, Math.max(1, parseInt(limit) || 10));
     const connection = await this.getConnection();
 
     const offset = page * limit;
@@ -246,7 +249,8 @@ class DB {
       }
 
       franchiseIds = franchiseIds.map((v) => v.objectId);
-      const franchises = await this.query(connection, `SELECT id, name FROM franchise WHERE id in (${franchiseIds.join(',')})`);
+      const placeholders = franchiseIds.map(() => '?').join(',');
+      const franchises = await this.query(connection, `SELECT id, name FROM franchise WHERE id in (${placeholders})`, franchiseIds);
       for (const franchise of franchises) {
         await this.getFranchise(franchise);
       }
@@ -289,7 +293,7 @@ class DB {
   }
 
   getOffset(currentPage = 1, listPerPage) {
-    return (currentPage - 1) * [listPerPage];
+    return (currentPage - 1) * listPerPage;
   }
 
   getTokenSignature(token) {
@@ -322,6 +326,10 @@ class DB {
   }
 
   async getID(connection, key, value, table) {
+    const VALID_TABLE_KEYS = { franchise: ['name'], menu: ['id'] };
+    if (!VALID_TABLE_KEYS[table] || !VALID_TABLE_KEYS[table].includes(key)) {
+      throw new Error(`Invalid table/key: ${table}/${key}`);
+    }
     const [rows] = await connection.execute(`SELECT id FROM ${table} WHERE ${key}=?`, [value]);
     if (rows.length > 0) {
       return rows[0].id;
@@ -375,7 +383,7 @@ class DB {
         connection.end();
       }
     } catch (err) {
-      console.error(JSON.stringify({ message: 'Error initializing database', exception: err.message, connection: config.db.connection }));
+      console.error(JSON.stringify({ message: 'Error initializing database', exception: err.message, host: config.db.connection.host, database: config.db.connection.database }));
     }
   }
 
